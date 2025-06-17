@@ -3,14 +3,16 @@
 #include <tf2/LinearMath/Quaternion.h>
 #include <tf2_ros/transform_broadcaster.h>
 #include <geometry_msgs/msg/transform_stamped.hpp>
-#include <serial_driver/serial_port.hpp>
 #include <string>
 #include <chrono>
 #include <cmath>
 #include <memory>
+#include <fcntl.h>
+#include <termios.h>
+#include <unistd.h>
+#include <errno.h>
 
 using namespace std::chrono_literals;
-using namespace drivers;
 
 class OdometryNode : public rclcpp::Node
 {
@@ -29,27 +31,39 @@ public:
         wheel_base_ = this->get_parameter("wheel_base").as_double();
         ticks_per_rev_ = this->get_parameter("ticks_per_revolution").as_int();
 
-        // Configure and open the serial port
-        serial_driver::SerialPortConfig config;
-        config.device_path = port_;
-        config.baud_rate = baudrate_;
-        config.flow_control = serial_driver::FlowControl::NONE;
-        config.parity = serial_driver::Parity::NONE;
-        config.stop_bits = serial_driver::StopBits::ONE;
-        config.data_bits = serial_driver::CharSize::EIGHT;
-
-        serial_port_ = std::make_unique<serial_driver::SerialPort>(
-            this->get_logger(), this->get_clock());
-
-        try
-        {
-            serial_port_->open(config);
-            RCLCPP_INFO(this->get_logger(), "Serial port %s opened", port_.c_str());
-        }
-        catch (const std::exception &e)
-        {
-            RCLCPP_FATAL(this->get_logger(), "Unable to open serial port %s: %s", port_.c_str(), e.what());
+        serial_fd_ = open(port_.c_str(), O_RDWR | O_NOCTTY);
+        if (serial_fd_ < 0) {
+            RCLCPP_FATAL(this->get_logger(), "Failed to open serial port %s", port_.c_str());
             rclcpp::shutdown();
+            return;
+        }
+
+        struct termios tty;
+        if (tcgetattr(serial_fd_, &tty) != 0) {
+            RCLCPP_FATAL(this->get_logger(), "Failed to get serial attributes");
+            rclcpp::shutdown();
+            return;
+        }
+
+        cfsetospeed(&tty, B9600);
+        cfsetispeed(&tty, B9600);
+
+        tty.c_cflag &= ~PARENB;
+        tty.c_cflag &= ~CSTOPB;
+        tty.c_cflag &= ~CSIZE;
+        tty.c_cflag |= CS8;
+        tty.c_cflag &= ~CRTSCTS;
+        tty.c_cflag |= CREAD | CLOCAL;
+        tty.c_lflag &= ~(ICANON | ECHO | ECHOE | ISIG);
+        tty.c_iflag &= ~(IXON | IXOFF | IXANY);
+        tty.c_oflag &= ~OPOST;
+        tty.c_cc[VMIN] = 0;
+        tty.c_cc[VTIME] = 10;
+
+        if (tcsetattr(serial_fd_, TCSANOW, &tty) != 0) {
+            RCLCPP_FATAL(this->get_logger(), "Failed to set serial attributes");
+            rclcpp::shutdown();
+            return;
         }
 
         odom_pub_ = this->create_publisher<nav_msgs::msg::Odometry>("odom", 10);
@@ -60,13 +74,11 @@ public:
 private:
     void update()
     {
-        std::string line;
-        try {
-            line = serial_port_->readline(100);  // Timeout: 100ms
-        } catch (const std::exception &e) {
-            RCLCPP_WARN(this->get_logger(), "Serial read failed: %s", e.what());
-            return;
-        }
+        char buf[256];
+        int n = read(serial_fd_, buf, sizeof(buf) - 1);
+        if (n <= 0) return;
+        buf[n] = '\0';
+        std::string line(buf);
 
         int enc_left = 0, enc_right = 0;
         if (sscanf(line.c_str(), "ENC_L:%d ENC_R:%d", &enc_left, &enc_right) == 2)
@@ -118,7 +130,7 @@ private:
         }
     }
 
-    std::unique_ptr<serial_driver::SerialPort> serial_port_;
+    int serial_fd_;
     std::string port_;
     int baudrate_;
     double wheel_radius_;

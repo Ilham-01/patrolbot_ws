@@ -4,3 +4,5 @@ upload new arduino code
 
 check the lidar input 
 
+install serial driver 
+install asio cmake module
