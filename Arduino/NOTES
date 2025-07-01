@@ -6,3 +6,9 @@ check the lidar input
 
 install serial driver 
 install asio cmake module
+
+https://github.com/YJ0528/minibot/blob/main/Package_Installation_Instruction.md
+
+https://github.com/ros-controls/ros2_control_demos/tree/master/example_2/hardware
+
+https://youtu.be/J02jEKawE5U
