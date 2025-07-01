@@ -1,6 +1,6 @@
 <?xml version="1.0"?>
 <package format="3">
-  <name>robot_bringup</name>
+  <name>robot_teleop</name>
   <version>0.1.0</version>
   <description>Robot bringup package including base, odometry, lidar and RViz.</description>
   <maintainer email="your_email@example.com">your_name</maintainer>
