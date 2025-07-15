@@ -41,9 +41,8 @@ private:
         serial_fd_ = open(port_.c_str(), O_RDWR | O_NOCTTY | O_SYNC);
         if (serial_fd_ < 0)
         {
-            RCLCPP_FATAL(this->get_logger(), "Failed to open serial port %s: %s", port_.c_str(), strerror(errno));
-            rclcpp::shutdown();
-            return;
+            RCLCPP_ERROR(this->get_logger(), "Failed to open serial port %s: %s", port_.c_str(), strerror(errno));
+            return;  // Don’t shutdown the node
         }
 
         struct termios tty;
@@ -51,32 +50,33 @@ private:
 
         if (tcgetattr(serial_fd_, &tty) != 0)
         {
-            RCLCPP_FATAL(this->get_logger(), "Error from tcgetattr: %s", strerror(errno));
-            rclcpp::shutdown();
+            RCLCPP_ERROR(this->get_logger(), "Error from tcgetattr: %s", strerror(errno));
+            close(serial_fd_);
+            serial_fd_ = -1;
             return;
         }
 
         cfsetospeed(&tty, baudrateToConstant(baudrate_));
         cfsetispeed(&tty, baudrateToConstant(baudrate_));
 
-        tty.c_cflag = (tty.c_cflag & ~CSIZE) | CS8;  // 8-bit chars
-        tty.c_iflag &= ~IGNBRK;         // disable break processing
-        tty.c_lflag = 0;                // no signaling chars, no echo, no canonical processing
-        tty.c_oflag = 0;                // no remapping, no delays
-        tty.c_cc[VMIN]  = 1;            // read doesn't block
-        tty.c_cc[VTIME] = 5;            // 0.5 seconds read timeout
+        tty.c_cflag = (tty.c_cflag & ~CSIZE) | CS8;
+        tty.c_iflag &= ~IGNBRK;
+        tty.c_lflag = 0;
+        tty.c_oflag = 0;
+        tty.c_cc[VMIN]  = 1;
+        tty.c_cc[VTIME] = 5;
 
-        tty.c_iflag &= ~(IXON | IXOFF | IXANY); // shut off xon/xoff ctrl
-
-        tty.c_cflag |= (CLOCAL | CREAD); // ignore modem controls, enable reading
-        tty.c_cflag &= ~(PARENB | PARODD);      // shut off parity
+        tty.c_iflag &= ~(IXON | IXOFF | IXANY);
+        tty.c_cflag |= (CLOCAL | CREAD);
+        tty.c_cflag &= ~(PARENB | PARODD);
         tty.c_cflag &= ~CSTOPB;
         tty.c_cflag &= ~CRTSCTS;
 
         if (tcsetattr(serial_fd_, TCSANOW, &tty) != 0)
         {
-            RCLCPP_FATAL(this->get_logger(), "Error from tcsetattr: %s", strerror(errno));
-            rclcpp::shutdown();
+            RCLCPP_ERROR(this->get_logger(), "Error from tcsetattr: %s", strerror(errno));
+            close(serial_fd_);
+            serial_fd_ = -1;
         }
         else
         {
@@ -99,20 +99,25 @@ private:
 
     void cmdVelCallback(const geometry_msgs::msg::Twist::SharedPtr msg)
     {
-        if (serial_fd_ == -1) return;
+        if (serial_fd_ == -1)
+        {
+            RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000, 
+                                 "Serial not available. Skipping cmd_vel command.");
+            return;
+        }
 
-        char command = 's';  // default stop
+        char command = 's';
         double linear = msg->linear.x;
         double angular = msg->angular.z;
 
         if (linear > 0.1)
-            command = 'f';  // forward
+            command = 'f';
         else if (linear < -0.1)
-            command = 'b';  // backward
+            command = 'b';
         else if (angular > 0.1)
-            command = 'l';  // left
+            command = 'l';
         else if (angular < -0.1)
-            command = 'r';  // right
+            command = 'r';
 
         int bytes_written = write(serial_fd_, &command, 1);
         if (bytes_written < 0) {

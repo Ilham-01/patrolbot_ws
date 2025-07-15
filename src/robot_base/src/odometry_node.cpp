@@ -10,14 +10,14 @@
 #include <fcntl.h>
 #include <termios.h>
 #include <unistd.h>
-#include <errno.h>
+#include <cerrno>
 
 using namespace std::chrono_literals;
 
 class OdometryNode : public rclcpp::Node
 {
 public:
-    OdometryNode() : Node("odometry_node"), x_(0.0), y_(0.0), theta_(0.0)
+    OdometryNode() : Node("odometry_node"), x_(0.0), y_(0.0), theta_(0.0), serial_fd_(-1)
     {
         this->declare_parameter<std::string>("port", "/dev/ttyUSB0");
         this->declare_parameter<int>("baudrate", 9600);
@@ -25,23 +25,52 @@ public:
         this->declare_parameter<double>("wheel_base", 0.16);
         this->declare_parameter<int>("ticks_per_revolution", 3200);
 
-        port_ = this->get_parameter("port").as_string();
-        baudrate_ = this->get_parameter("baudrate").as_int();
-        wheel_radius_ = this->get_parameter("wheel_radius").as_double();
-        wheel_base_ = this->get_parameter("wheel_base").as_double();
-        ticks_per_rev_ = this->get_parameter("ticks_per_revolution").as_int();
+        this->get_parameter("port", port_);
+        this->get_parameter("baudrate", baudrate_);
+        this->get_parameter("wheel_radius", wheel_radius_);
+        this->get_parameter("wheel_base", wheel_base_);
+        this->get_parameter("ticks_per_revolution", ticks_per_rev_);
 
+        openSerialPort();
+
+        odom_pub_ = this->create_publisher<nav_msgs::msg::Odometry>("odom", 10);
+        tf_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>(*this);
+        timer_ = this->create_wall_timer(50ms, std::bind(&OdometryNode::update, this));
+    }
+
+    ~OdometryNode()
+    {
+        if (serial_fd_ != -1)
+            close(serial_fd_);
+    }
+
+private:
+    std::string port_;
+    int baudrate_;
+    int serial_fd_;
+    double wheel_radius_;
+    double wheel_base_;
+    int ticks_per_rev_;
+    int prev_left_ = 0, prev_right_ = 0;
+    double x_, y_, theta_;
+
+    rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odom_pub_;
+    std::shared_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
+    rclcpp::TimerBase::SharedPtr timer_;
+
+    void openSerialPort()
+    {
         serial_fd_ = open(port_.c_str(), O_RDWR | O_NOCTTY);
         if (serial_fd_ < 0) {
-            RCLCPP_FATAL(this->get_logger(), "Failed to open serial port %s", port_.c_str());
-            rclcpp::shutdown();
+            RCLCPP_WARN(this->get_logger(), "Serial port %s not available. Odometry will not be updated.", port_.c_str());
             return;
         }
 
         struct termios tty;
         if (tcgetattr(serial_fd_, &tty) != 0) {
-            RCLCPP_FATAL(this->get_logger(), "Failed to get serial attributes");
-            rclcpp::shutdown();
+            RCLCPP_ERROR(this->get_logger(), "Failed to get serial attributes: %s", strerror(errno));
+            close(serial_fd_);
+            serial_fd_ = -1;
             return;
         }
 
@@ -61,27 +90,29 @@ public:
         tty.c_cc[VTIME] = 10;
 
         if (tcsetattr(serial_fd_, TCSANOW, &tty) != 0) {
-            RCLCPP_FATAL(this->get_logger(), "Failed to set serial attributes");
-            rclcpp::shutdown();
+            RCLCPP_ERROR(this->get_logger(), "Failed to set serial attributes: %s", strerror(errno));
+            close(serial_fd_);
+            serial_fd_ = -1;
             return;
         }
 
-        odom_pub_ = this->create_publisher<nav_msgs::msg::Odometry>("odom", 10);
-        tf_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>(*this);
-        timer_ = this->create_wall_timer(50ms, std::bind(&OdometryNode::update, this));
+        RCLCPP_INFO(this->get_logger(), "Serial port %s opened for odometry.", port_.c_str());
     }
 
-private:
     void update()
     {
+        if (serial_fd_ < 0) {
+            RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 3000, "Serial not open. Skipping odometry update.");
+            return;
+        }
+
         char buf[256];
         int n = read(serial_fd_, buf, sizeof(buf) - 1);
         if (n <= 0) return;
         buf[n] = '\0';
-        std::string line(buf);
 
         int enc_left = 0, enc_right = 0;
-        if (sscanf(line.c_str(), "ENC_L:%d ENC_R:%d", &enc_left, &enc_right) == 2)
+        if (sscanf(buf, "ENC_L:%d ENC_R:%d", &enc_left, &enc_right) == 2)
         {
             auto now = this->get_clock()->now();
 
@@ -128,21 +159,11 @@ private:
 
             tf_broadcaster_->sendTransform(tf);
         }
+        else
+        {
+            RCLCPP_WARN(this->get_logger(), "Unexpected serial data: %s", buf);
+        }
     }
-
-    int serial_fd_;
-    std::string port_;
-    int baudrate_;
-    double wheel_radius_;
-    double wheel_base_;
-    int ticks_per_rev_;
-
-    rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odom_pub_;
-    std::shared_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
-    rclcpp::TimerBase::SharedPtr timer_;
-
-    int prev_left_ = 0, prev_right_ = 0;
-    double x_, y_, theta_;
 };
 
 int main(int argc, char **argv)

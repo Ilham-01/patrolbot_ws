@@ -28,6 +28,11 @@ int distM, distR, distL;
 String inputString = "";
 bool stringComplete = false;
 
+// Manual override
+unsigned long lastCommandTime = 0;
+bool manual_override = false;
+const unsigned long overrideTimeout = 1000; // 1 second
+
 void setup() {
   Serial.begin(9600);
   inputString.reserve(50);
@@ -52,12 +57,22 @@ void setup() {
 }
 
 void loop() {
-  readUltrasonics();
+  unsigned long currentMillis = millis();
 
   if (stringComplete) {
     processSerialCommand(inputString);
     inputString = "";
     stringComplete = false;
+    lastCommandTime = currentMillis;
+    manual_override = true;
+  }
+
+  if (manual_override && (currentMillis - lastCommandTime > overrideTimeout)) {
+    manual_override = false;
+  }
+
+  if (!manual_override) {
+    readUltrasonics();  // Obstacle handling only when no teleop input
   }
 
   sendEncoderData();
@@ -110,7 +125,6 @@ void processSerialCommand(String cmd) {
     }
   }
 }
-
 
 void setMotorDirection(int leftDir, int rightDir) {
   // Left motor
