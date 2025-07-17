@@ -48,7 +48,8 @@ void setup() {
   pinMode(motorA1, OUTPUT); pinMode(motorA2, OUTPUT);
   pinMode(motorB1, OUTPUT); pinMode(motorB2, OUTPUT);
   pinMode(speedMotor, OUTPUT);
-  analogWrite(speedMotor, 125);
+
+  analogWrite(speedMotor, 0);
 
   pinMode(leftEncoderPin, INPUT_PULLUP);
   pinMode(rightEncoderPin, INPUT_PULLUP);
@@ -89,13 +90,14 @@ void serialEvent() {
   }
 }
 
-void processSerialCommand(String cmd) {
-  cmd.trim();  // Remove trailing newline and whitespace
+// Format: 1 direction char + 3-digit speed (e.g., f120, l080)
+  if (cmd.length() == 4) {
+    char dir = cmd.charAt(0);
+    int speed = cmd.substring(1).toInt();
+    speed = constrain(speed, 0, 255);
+    analogWrite(speedMotor, speed);
 
-  // ROS 2 motor driver node sends single characters
-  if (cmd.length() == 1) {
-    char c = cmd.charAt(0);
-    switch (c) {
+    switch (dir) {
       case 'f':
         Lmotor_forward(); Rmotor_forward();
         break;
@@ -109,13 +111,14 @@ void processSerialCommand(String cmd) {
         Lmotor_forward(); Rmotor_reverse();
         break;
       case 's':
-        Lmotor_stop(); Rmotor_stop();
-        break;
       default:
+        analogWrite(speedMotor, 0);
+        Lmotor_stop(); Rmotor_stop();
         break;
     }
   }
-  // Optional: support CMD:<left>:<right> format (can be used later)
+
+  // Optional future format: CMD:<left>:<right>
   else if (cmd.startsWith("CMD:")) {
     int sep = cmd.indexOf(':', 4);
     if (sep > 4) {
@@ -124,7 +127,7 @@ void processSerialCommand(String cmd) {
       setMotorDirection(leftDir, rightDir);
     }
   }
-}
+
 
 void setMotorDirection(int leftDir, int rightDir) {
   // Left motor

@@ -4,8 +4,6 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <string>
-#include <sstream>
-#include <iomanip>
 #include <cstring>
 #include <cerrno>
 
@@ -16,11 +14,8 @@ public:
     {
         this->declare_parameter<std::string>("port", "/dev/ttyAMA0");
         this->declare_parameter<int>("baudrate", 9600);
-        this->declare_parameter<double>("max_speed", 255.0);  // max PWM or motor value
-
         this->get_parameter("port", port_);
         this->get_parameter("baudrate", baudrate_);
-        this->get_parameter("max_speed", max_speed_);
 
         openSerialPort();
 
@@ -39,7 +34,6 @@ private:
     std::string port_;
     int baudrate_;
     int serial_fd_;
-    double max_speed_;
     rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_sub_;
 
     void openSerialPort()
@@ -48,7 +42,7 @@ private:
         if (serial_fd_ < 0)
         {
             RCLCPP_ERROR(this->get_logger(), "Failed to open serial port %s: %s", port_.c_str(), strerror(errno));
-            return;
+            return;  // Don’t shutdown the node
         }
 
         struct termios tty;
@@ -69,7 +63,7 @@ private:
         tty.c_iflag &= ~IGNBRK;
         tty.c_lflag = 0;
         tty.c_oflag = 0;
-        tty.c_cc[VMIN] = 1;
+        tty.c_cc[VMIN]  = 1;
         tty.c_cc[VTIME] = 5;
 
         tty.c_iflag &= ~(IXON | IXOFF | IXANY);
@@ -107,52 +101,33 @@ private:
     {
         if (serial_fd_ == -1)
         {
-            RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
+            RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000, 
                                  "Serial not available. Skipping cmd_vel command.");
             return;
         }
 
         char command = 's';
-        double speed = 0.0;
+        double linear = msg->linear.x;
+        double angular = msg->angular.z;
 
-        const double linear = msg->linear.x;
-        const double angular = msg->angular.z;
+        if (linear > 0.1)
+            command = 'f';
+        else if (linear < -0.1)
+            command = 'b';
+        else if (angular > 0.1)
+            command = 'l';
+        else if (angular < -0.1)
+            command = 'r';
 
-        // Determine direction and scale speed
-        if (std::abs(linear) > 0.05)
-        {
-            command = (linear > 0) ? 'f' : 'b';
-            speed = std::min(std::abs(linear), 1.0) * max_speed_;
-        }
-        else if (std::abs(angular) > 0.05)
-        {
-            command = (angular > 0) ? 'l' : 'r';
-            speed = std::min(std::abs(angular), 1.0) * max_speed_;
-        }
-        else
-        {
-            command = 's';
-            speed = 0.0;
-        }
-
-        // Build command string like "f120\n"
-        std::ostringstream cmd_stream;
-        cmd_stream << command << std::setw(3) << std::setfill('0') << static_cast<int>(speed) << "\n";
-        std::string cmd_str = cmd_stream.str();
-
-        int bytes_written = write(serial_fd_, cmd_str.c_str(), cmd_str.length());
-
-        if (bytes_written < 0)
-        {
+        int bytes_written = write(serial_fd_, &command, 1);
+        if (bytes_written < 0) {
             RCLCPP_ERROR(this->get_logger(), "Failed to write to serial: %s", strerror(errno));
-        }
-        else
-        {
-            RCLCPP_INFO(this->get_logger(), "Sent command: %s", cmd_str.c_str());
+        } else {
+            RCLCPP_INFO(this->get_logger(), "Sent command '%c' over serial", command);
         }
     }
 };
- 
+
 int main(int argc, char *argv[])
 {
     rclcpp::init(argc, argv);
