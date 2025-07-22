@@ -28,7 +28,7 @@ public:
         odom_pub_ = this->create_publisher<nav_msgs::msg::Odometry>("odom", 10);
         tf_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>(this);
         timer_ = this->create_wall_timer(50ms, std::bind(&OdometryNode::update, this));
-        openSerial("/dev/ttyAMA0");
+        openSerial("/dev/ttyUSB0");
     }
 
 private:
