@@ -1,6 +1,4 @@
-// -----------------------------
-// Pin Definitions
-// -----------------------------
+// Pin definitions
 #define alarm 7
 #define red_light 6
 #define green_light 5
@@ -13,26 +11,30 @@
 #define leftEncoderPin 18
 #define rightEncoderPin 19
 
-// -----------------------------
-// State Variables
-// -----------------------------
+// Encoder tick counts
 volatile long leftTicks = 0;
 volatile long rightTicks = 0;
 
-float leftSpeed = 0.0;
-float rightSpeed = 0.0;
-unsigned long lastCommandTime = 0;
-const unsigned long timeoutMs = 1000;
+long lastSentLeftTicks = 0;
+long lastSentRightTicks = 0;
 
-String inputString = "";
-bool stringComplete = false;
+unsigned long lastSendTime = 0;
+const unsigned long sendInterval = 100; // Send encoder data every 100ms
 
-// -----------------------------
-// Setup
-// -----------------------------
+// Motor speed variables
+float leftSpeedCmd = 0.0;  // Range: -1.0 to 1.0
+float rightSpeedCmd = 0.0; // Range: -1.0 to 1.0
+
+// PWM limits
+const int pwmMax = 255;
+
+// Function prototypes
+void parseSerialCommand();
+void updateMotors();
+void sendEncoderCounts();
+
 void setup() {
   Serial.begin(115200);
-  inputString.reserve(50);
 
   pinMode(alarm, OUTPUT);
   pinMode(red_light, OUTPUT);
@@ -41,7 +43,7 @@ void setup() {
   pinMode(motorA1, OUTPUT); pinMode(motorA2, OUTPUT);
   pinMode(motorB1, OUTPUT); pinMode(motorB2, OUTPUT);
   pinMode(speedMotor, OUTPUT);
-  analogWrite(speedMotor, 200);  // fixed PWM speed
+  analogWrite(speedMotor, 200); // Base PWM speed, can be adjusted
 
   pinMode(leftEncoderPin, INPUT_PULLUP);
   pinMode(rightEncoderPin, INPUT_PULLUP);
@@ -49,106 +51,96 @@ void setup() {
   attachInterrupt(digitalPinToInterrupt(rightEncoderPin), countRight, RISING);
 }
 
-// -----------------------------
-// Main Loop
-// -----------------------------
 void loop() {
+  // Parse incoming serial commands for motor control
+  parseSerialCommand();
+
+  // Update motor PWM signals based on commands
+  updateMotors();
+
+  // Periodically send encoder counts for odometry
   unsigned long now = millis();
-
-  if (stringComplete) {
-    parseCommand(inputString);
-    inputString = "";
-    stringComplete = false;
-    lastCommandTime = now;
+  if (now - lastSendTime >= sendInterval) {
+    sendEncoderCounts();
+    lastSendTime = now;
   }
-
-  // Stop if no command received recently
-  if (now - lastCommandTime > timeoutMs) {
-    stopMotors();
-  } else {
-    applyMotorSpeeds();
-  }
-
-  sendEncoderData();
-  delay(50);  // Adjust based on how fast you want updates
 }
 
-// -----------------------------
-// Serial Event
-// -----------------------------
-void serialEvent() {
+// Parse serial input for motor commands
+void parseSerialCommand() {
   while (Serial.available()) {
-    char inChar = (char)Serial.read();
-    inputString += inChar;
-    if (inChar == '\n') {
-      stringComplete = true;
+    String line = Serial.readStringUntil('\n');
+    line.trim();
+    if (line.length() == 0)
+      continue;
+
+    // Expected format: "R<speed>,L<speed>"
+    int rIndex = line.indexOf('R');
+    int lIndex = line.indexOf('L');
+
+    if (rIndex != -1 && lIndex != -1) {
+      float rSpeed = 0.0, lSpeed = 0.0;
+
+      // Parse right speed
+      int commaIndex = line.indexOf(',', rIndex);
+      if (commaIndex != -1) {
+        String rStr = line.substring(rIndex + 1, commaIndex);
+        rSpeed = rStr.toFloat();
+      }
+
+      // Parse left speed
+      int endIdx = line.length();
+      String lStr = line.substring(lIndex + 1, endIdx);
+      lSpeed = lStr.toFloat();
+
+      // Clamp speeds to -1.0 to 1.0
+      rSpeed = constrain(rSpeed, -1.0, 1.0);
+      lSpeed = constrain(lSpeed, -1.0, 1.0);
+
+      // Update motor commands
+      leftSpeedCmd = lSpeed;
+      rightSpeedCmd = rSpeed;
     }
   }
 }
 
-// -----------------------------
-// Parse ROS2 Velocity Command
-// -----------------------------
-void parseCommand(String cmd) {
-  cmd.trim();
-  int spaceIndex = cmd.indexOf(' ');
-  if (spaceIndex > 0 && spaceIndex < cmd.length() - 1) {
-    float l = cmd.substring(0, spaceIndex).toFloat();
-    float r = cmd.substring(spaceIndex + 1).toFloat();
-    leftSpeed = l;
-    rightSpeed = r;
-  }
-}
-
-// -----------------------------
-// Apply Speeds to Motors
-// -----------------------------
-void applyMotorSpeeds() {
-  setMotor(leftSpeed, 'L');
-  setMotor(rightSpeed, 'R');
-}
-
-void setMotor(float speed, char side) {
-  int in1, in2;
-  if (side == 'L') {
-    in1 = motorA1; in2 = motorA2;
+// Update motor PWM signals based on command speeds
+void updateMotors() {
+  // Left motor
+  if (leftSpeedCmd >= 0) {
+    digitalWrite(motorA1, HIGH);
+    digitalWrite(motorA2, LOW);
   } else {
-    in1 = motorB1; in2 = motorB2;
+    digitalWrite(motorA1, LOW);
+    digitalWrite(motorA2, HIGH);
   }
+  analogWrite(speedMotor, (int)(abs(leftSpeedCmd) * pwmMax));
 
-  if (speed > 0.01) {
-    digitalWrite(in1, HIGH);
-    digitalWrite(in2, LOW);
-  } else if (speed < -0.01) {
-    digitalWrite(in1, LOW);
-    digitalWrite(in2, HIGH);
+  // Right motor
+  if (rightSpeedCmd >= 0) {
+    digitalWrite(motorB1, HIGH);
+    digitalWrite(motorB2, LOW);
   } else {
-    digitalWrite(in1, LOW);
-    digitalWrite(in2, LOW);
+    digitalWrite(motorB1, LOW);
+    digitalWrite(motorB2, HIGH);
   }
+  // You can consider separate PWM if your hardware supports it
+  // For simplicity, using same PWM for both
 }
 
-// -----------------------------
-// Stop Motors
-// -----------------------------
-void stopMotors() {
-  leftSpeed = 0.0;
-  rightSpeed = 0.0;
-  digitalWrite(motorA1, LOW); digitalWrite(motorA2, LOW);
-  digitalWrite(motorB1, LOW); digitalWrite(motorB2, LOW);
+// Interrupt routines for encoder
+void countLeft() {
+  leftTicks++;
 }
 
-// -----------------------------
-// Encoder Output
-// -----------------------------
-void sendEncoderData() {
+void countRight() {
+  rightTicks++;
+}
+
+// Send encoder counts over serial
+void sendEncoderCounts() {
+  Serial.print("L:");
   Serial.print(leftTicks);
-  Serial.print(" ");
+  Serial.print(" R:");
   Serial.println(rightTicks);
 }
-
-// -----------------------------
-// Encoder ISRs
-// -----------------------------
-void countLeft()  { leftTicks++; }
-void countRight() { rightTicks++; }
