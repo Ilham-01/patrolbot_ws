@@ -1,4 +1,6 @@
-// Motor & Lights
+// -----------------------------
+// Pin Definitions
+// -----------------------------
 #define alarm 7
 #define red_light 6
 #define green_light 5
@@ -22,17 +24,21 @@ const int echoPinL = A5;
 volatile long leftTicks = 0;
 volatile long rightTicks = 0;
 
+// -----------------------------
 // State Variables
+// -----------------------------
 int threshold_dist = 50;
 int distM, distR, distL;
 String inputString = "";
 bool stringComplete = false;
 
-// Manual override
 unsigned long lastCommandTime = 0;
 bool manual_override = false;
 const unsigned long overrideTimeout = 1000; // 1 second
 
+// -----------------------------
+// Setup
+// -----------------------------
 void setup() {
   Serial.begin(9600);
   inputString.reserve(50);
@@ -57,6 +63,9 @@ void setup() {
   attachInterrupt(digitalPinToInterrupt(rightEncoderPin), countRight, RISING);
 }
 
+// -----------------------------
+// Main Loop
+// -----------------------------
 void loop() {
   unsigned long currentMillis = millis();
 
@@ -73,13 +82,16 @@ void loop() {
   }
 
   if (!manual_override) {
-    readUltrasonics();  // Obstacle handling only when no teleop input
+    readUltrasonics();  // Autonomous obstacle avoidance
   }
 
   sendEncoderData();
-  delay(100);  // limit loop speed
+  delay(100); // loop pacing
 }
 
+// -----------------------------
+// Serial Event
+// -----------------------------
 void serialEvent() {
   while (Serial.available()) {
     char inChar = (char)Serial.read();
@@ -90,7 +102,12 @@ void serialEvent() {
   }
 }
 
-// Format: 1 direction char + 3-digit speed (e.g., f120, l080)
+// -----------------------------
+// Process Incoming Command
+// -----------------------------
+void processSerialCommand(String cmd) {
+  cmd.trim(); // remove newline/whitespace
+
   if (cmd.length() == 4) {
     char dir = cmd.charAt(0);
     int speed = cmd.substring(1).toInt();
@@ -98,18 +115,10 @@ void serialEvent() {
     analogWrite(speedMotor, speed);
 
     switch (dir) {
-      case 'f':
-        Lmotor_forward(); Rmotor_forward();
-        break;
-      case 'b':
-        Lmotor_reverse(); Rmotor_reverse();
-        break;
-      case 'l':
-        Lmotor_reverse(); Rmotor_forward();
-        break;
-      case 'r':
-        Lmotor_forward(); Rmotor_reverse();
-        break;
+      case 'f': Lmotor_forward(); Rmotor_forward(); break;
+      case 'b': Lmotor_reverse(); Rmotor_reverse(); break;
+      case 'l': Lmotor_reverse(); Rmotor_forward(); break;
+      case 'r': Lmotor_forward(); Rmotor_reverse(); break;
       case 's':
       default:
         analogWrite(speedMotor, 0);
@@ -117,8 +126,6 @@ void serialEvent() {
         break;
     }
   }
-
-  // Optional future format: CMD:<left>:<right>
   else if (cmd.startsWith("CMD:")) {
     int sep = cmd.indexOf(':', 4);
     if (sep > 4) {
@@ -127,20 +134,11 @@ void serialEvent() {
       setMotorDirection(leftDir, rightDir);
     }
   }
-
-
-void setMotorDirection(int leftDir, int rightDir) {
-  // Left motor
-  if (leftDir > 0) { Lmotor_forward(); }
-  else if (leftDir < 0) { Lmotor_reverse(); }
-  else { Lmotor_stop(); }
-
-  // Right motor
-  if (rightDir > 0) { Rmotor_forward(); }
-  else if (rightDir < 0) { Rmotor_reverse(); }
-  else { Rmotor_stop(); }
 }
 
+// -----------------------------
+// Obstacle Avoidance
+// -----------------------------
 void readUltrasonics() {
   distM = ultrasonic(trigPinM, echoPinM);
   distR = ultrasonic(trigPinR, echoPinR);
@@ -157,11 +155,17 @@ void readUltrasonics() {
   }
 }
 
+// -----------------------------
+// Encoder Output
+// -----------------------------
 void sendEncoderData() {
   Serial.print("ENC_L:"); Serial.print(leftTicks);
   Serial.print(" ENC_R:"); Serial.println(rightTicks);
 }
 
+// -----------------------------
+// Ultrasonic Measurement
+// -----------------------------
 int ultrasonic(int trigPin, int echoPin) {
   digitalWrite(trigPin, LOW); delayMicroseconds(2);
   digitalWrite(trigPin, HIGH); delayMicroseconds(10); digitalWrite(trigPin, LOW);
@@ -170,7 +174,9 @@ int ultrasonic(int trigPin, int echoPin) {
   return distance;
 }
 
-// Motor control functions
+// -----------------------------
+// Motor Controls
+// -----------------------------
 void Rmotor_forward()  { digitalWrite(motorB1, HIGH); digitalWrite(motorB2, LOW); }
 void Rmotor_reverse()  { digitalWrite(motorB1, LOW);  digitalWrite(motorB2, HIGH); }
 void Rmotor_stop()     { digitalWrite(motorB1, LOW);  digitalWrite(motorB2, LOW); }
@@ -179,6 +185,9 @@ void Lmotor_forward()  { digitalWrite(motorA1, HIGH); digitalWrite(motorA2, LOW)
 void Lmotor_reverse()  { digitalWrite(motorA1, LOW);  digitalWrite(motorA2, HIGH); }
 void Lmotor_stop()     { digitalWrite(motorA1, LOW);  digitalWrite(motorA2, LOW); }
 
+// -----------------------------
+// Lights and Alarm
+// -----------------------------
 void Glight_on()       { digitalWrite(green_light, HIGH); }
 void Glight_off()      { digitalWrite(green_light, LOW); }
 void Rlight_on()       { digitalWrite(red_light, HIGH); }
@@ -186,5 +195,21 @@ void Rlight_off()      { digitalWrite(red_light, LOW); }
 void alarm_on()        { digitalWrite(alarm, HIGH); }
 void alarm_off()       { digitalWrite(alarm, LOW); }
 
-void countLeft() { leftTicks++; }
+// -----------------------------
+// Encoder ISRs
+// -----------------------------
+void countLeft()  { leftTicks++; }
 void countRight() { rightTicks++; }
+
+// -----------------------------
+// Raw Motor Direction Control
+// -----------------------------
+void setMotorDirection(int leftDir, int rightDir) {
+  if (leftDir > 0) Lmotor_forward();
+  else if (leftDir < 0) Lmotor_reverse();
+  else Lmotor_stop();
+
+  if (rightDir > 0) Rmotor_forward();
+  else if (rightDir < 0) Rmotor_reverse();
+  else Rmotor_stop();
+}

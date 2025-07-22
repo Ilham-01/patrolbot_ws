@@ -1,0 +1,9 @@
+<library path="libdiffbot_arduino_hardware">
+  <class name="robot_hardware/DiffbotArduinoSystem"
+         type="robot_hardware::DiffbotArduinoSystem"
+         base_class_type="hardware_interface::SystemInterface">
+    <description>
+      System interface for a differential drive robot using Arduino.
+    </description>
+  </class>
+</library>
